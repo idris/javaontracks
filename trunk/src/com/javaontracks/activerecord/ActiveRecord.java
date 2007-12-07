@@ -117,25 +117,19 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 	}
 
 	public int getPrimaryKey() {
-		return get(table.primaryKey);
+		return getInt(table.primaryKey);
 	}
 
 	public int getInt(String field) {
-		try {
-			return get(field);
-		} catch(Exception ex) {
-			System.out.println("getting " + field + " from " + table.name + " " + getPrimaryKey());
-			System.out.println("value is " + get(field));
-			throw new NullPointerException("getInt Error");
-		}
+		return ((Integer)get(field)).intValue();
 	}
 
 	public boolean getBoolean(String field) {
-		return get(field);
+		return ((Boolean)get(field)).booleanValue();
 	}
 
 	public double getDouble(String field) {
-		return get(field);
+		return ((Double)get(field)).doubleValue();
 	}
 
 	public <E> E get(String field) {
