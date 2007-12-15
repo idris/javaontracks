@@ -19,7 +19,7 @@ import org.jvnet.inflector.Noun;
 
 import com.javaontracks.cache.MemCache;
 
-public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Serializable {
+public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements Serializable {
 //	private String tableName;
 	protected Hashtable<String, Object> attributes;
 //	protected Hashtable<String, Object> defaultAttributes; //TODO: add this in later... maybe
@@ -32,8 +32,8 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 	private Hashtable<String, Vector<Integer>> hasManyIDs = new Hashtable<String, Vector<Integer>>();
 	private Hashtable<String, Integer> belongsToIDs = new Hashtable<String, Integer>();
 
-	private transient Hashtable<String, Vector<? extends ActiveRecord<?>>> hasMany;
-	private transient Hashtable<String, ActiveRecord<?>> belongsTo;
+	private transient Hashtable<String, Vector<? extends ActiveRecordBase<?>>> hasMany;
+	private transient Hashtable<String, ActiveRecordBase<?>> belongsTo;
 
 	private transient String parent = null;
 
@@ -47,11 +47,11 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 
 	public static boolean logQueries = false;
 
-	public ActiveRecord() {
+	public ActiveRecordBase() {
 //		tableName = ClassUtil.getTableName(getClass());
 //		primaryKey = ClassUtil.removeCamelCase(getClass().getSimpleName()) + "id";
-		hasMany = new Hashtable<String, Vector<? extends ActiveRecord<?>>>();
-		belongsTo = new Hashtable<String, ActiveRecord<?>>();
+		hasMany = new Hashtable<String, Vector<? extends ActiveRecordBase<?>>>();
+		belongsTo = new Hashtable<String, ActiveRecordBase<?>>();
 		Class<?> c = getClass();
 		Table t = (Table<T>)(tables.get(c));
 		if(t == null) {
@@ -71,11 +71,11 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 	private void loadHasMany(String otherTable) throws Exception {
 		Vector<Integer> ids = hasManyIDs.get(otherTable);
 		Relationship r = table.hasMany.get(otherTable);
-		ActiveRecord<?> other = (ActiveRecord<?>)(r.foreignClass.getConstructor().newInstance());
+		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.getConstructor().newInstance());
 		if(ids == null) {
-			Vector<? extends ActiveRecord<?>> kids = other.lookupWithCache(r.foreignKey + "=?", getPrimaryKey());
+			Vector<? extends ActiveRecordBase<?>> kids = other.lookupWithCache(r.foreignKey + "=?", getPrimaryKey());
 			Vector<Integer> kidIDs = new Vector<Integer>(kids.size());
-			for(ActiveRecord<?> kid: kids) {
+			for(ActiveRecordBase<?> kid: kids) {
 				kidIDs.add(kid.getPrimaryKey());
 				kid.setParent(r.foreignKey, this);
 			}
@@ -85,9 +85,9 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 			return;
 		}
 
-		Vector<ActiveRecord<?>>kids = new Vector<ActiveRecord<?>>();
+		Vector<ActiveRecordBase<?>>kids = new Vector<ActiveRecordBase<?>>();
 		for(int id: ids) {
-			ActiveRecord<?> kid = other.lookup(id);
+			ActiveRecordBase<?> kid = other.lookup(id);
 			kids.add(kid);
 		}
 		hasMany.put(otherTable, kids);
@@ -106,11 +106,11 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 		if(otherID == null) {
 			return;
 		}
-		ActiveRecord<?> other = (ActiveRecord<?>)(r.foreignClass.getConstructor().newInstance());
+		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.getConstructor().newInstance());
 		belongsTo.put(otherTable, other.lookup(otherID.intValue()));
 	}
 
-	private void setParent(String foreignKey, ActiveRecord<?> obj) {
+	private void setParent(String foreignKey, ActiveRecordBase<?> obj) {
 		String ref = ClassUtil.keyToReference(foreignKey);
 		parent = ref;
 		belongsTo.put(parent, obj);
@@ -118,6 +118,14 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 
 	public int getPrimaryKey() {
 		return getInt(table.primaryKey);
+	}
+
+	public int getID() {
+		return getPrimaryKey();
+	}
+
+	public int getId() {
+		return getPrimaryKey();
 	}
 
 	public int getInt(String field) {
@@ -187,8 +195,8 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 					set(r.foreignKey, null);
 					belongsTo.remove(field);
 				} else {
-					set(r.foreignKey, ((ActiveRecord<?>)value).getPrimaryKey());
-					belongsTo.put(field, (ActiveRecord<?>)value);
+					set(r.foreignKey, ((ActiveRecordBase<?>)value).getPrimaryKey());
+					belongsTo.put(field, (ActiveRecordBase<?>)value);
 				}
 				if(modify) modify(r.foreignKey);
 			} else {
@@ -637,7 +645,7 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 	public boolean equals(Object o) {
 		try {
 			if(o.getClass() != getClass()) return false;
-			return ((ActiveRecord<T>)o).getPrimaryKey() == getPrimaryKey();
+			return ((ActiveRecordBase<T>)o).getPrimaryKey() == getPrimaryKey();
 		} catch(Exception ex) {
 			return false;
 		}
@@ -651,7 +659,7 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 			MemCache.delete(r.table + "-" + fk.toString());
 		}
 		if(parent != null) {
-			((ActiveRecord<?>)(get(parent))).reset(Noun.pluralOf(ClassUtil.keyToReference(parent)));
+			((ActiveRecordBase<?>)(get(parent))).reset(Noun.pluralOf(ClassUtil.keyToReference(parent)));
 			parent = null;
 		}
 	}
@@ -678,8 +686,8 @@ public abstract class ActiveRecord<T extends ActiveRecord<T>> implements Seriali
 	}
 
 	protected void reloadTransients() {
-		hasMany = new Hashtable<String, Vector<? extends ActiveRecord<?>>>();
-		belongsTo = new Hashtable<String, ActiveRecord<?>>();
+		hasMany = new Hashtable<String, Vector<? extends ActiveRecordBase<?>>>();
+		belongsTo = new Hashtable<String, ActiveRecordBase<?>>();
 		Class<?> c = getClass();
 		Table<T> t = (Table<T>)(tables.get(c));
 		if(t == null) {

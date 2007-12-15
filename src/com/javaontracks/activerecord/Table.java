@@ -12,7 +12,7 @@ import java.util.Hashtable;
 import java.util.Properties;
 import java.util.Vector;
 
-public class Table<T extends ActiveRecord<T>> {
+public class Table<T extends ActiveRecordBase<T>> {
 	public final String name;
 	public final Hashtable<String, Column> columns;
 	public final Vector<String> columnNames;
