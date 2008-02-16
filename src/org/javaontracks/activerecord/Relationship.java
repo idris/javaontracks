@@ -1,4 +1,4 @@
-package com.javaontracks.activerecord;
+package org.javaontracks.activerecord;
 
 public class Relationship {
 	public final String table;

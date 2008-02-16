@@ -1,4 +1,4 @@
-package com.javaontracks.activerecord;
+package org.javaontracks.activerecord;
 
 public final class Column {
 	public final String name;

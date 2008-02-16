@@ -1,4 +1,4 @@
-package com.javaontracks.activerecord;
+package org.javaontracks.activerecord;
 
 import org.jvnet.inflector.Noun;
 

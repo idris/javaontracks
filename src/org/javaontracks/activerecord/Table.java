@@ -1,4 +1,4 @@
-package com.javaontracks.activerecord;
+package org.javaontracks.activerecord;
 
 import java.io.FileInputStream;
 import java.sql.Connection;

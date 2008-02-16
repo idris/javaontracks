@@ -1,4 +1,4 @@
-package com.javaontracks.activerecord;
+package org.javaontracks.activerecord;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
@@ -15,19 +15,12 @@ import java.util.Map;
 import java.util.Vector;
 import java.util.Iterator;
 
+import org.javaontracks.cache.MemCache;
 import org.jvnet.inflector.Noun;
 
-import com.javaontracks.cache.MemCache;
 
 public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements Serializable {
-//	private String tableName;
 	protected Hashtable<String, Object> attributes;
-//	protected Hashtable<String, Object> defaultAttributes; //TODO: add this in later... maybe
-//	protected Hashtable<String, Class<?>> columns;
-//	protected String primaryKey;
-//	protected String sequence = null;
-//	private Hashtable<String, Relationship> hasManyTables = new Hashtable<String, Relationship>();
-//	private Hashtable<String, Relationship> belongsToTables = new Hashtable<String, Relationship>();
 
 	private Hashtable<String, Vector<Integer>> hasManyIDs = new Hashtable<String, Vector<Integer>>();
 	private Hashtable<String, Integer> belongsToIDs = new Hashtable<String, Integer>();
