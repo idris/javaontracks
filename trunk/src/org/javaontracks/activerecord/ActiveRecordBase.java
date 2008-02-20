@@ -9,18 +9,24 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
-import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Vector;
-import java.util.Iterator;
 
-import org.javaontracks.cache.MemCache;
 import org.jvnet.inflector.Noun;
 
+import org.javaontracks.cache.MemCache;
 
 public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements Serializable {
+//	private String tableName;
 	protected Hashtable<String, Object> attributes;
+//	protected Hashtable<String, Object> defaultAttributes; //TODO: add this in later... maybe
+//	protected Hashtable<String, Class<?>> columns;
+//	protected String primaryKey;
+//	protected String sequence = null;
+//	private Hashtable<String, Relationship> hasManyTables = new Hashtable<String, Relationship>();
+//	private Hashtable<String, Relationship> belongsToTables = new Hashtable<String, Relationship>();
 
 	private Hashtable<String, Vector<Integer>> hasManyIDs = new Hashtable<String, Vector<Integer>>();
 	private Hashtable<String, Integer> belongsToIDs = new Hashtable<String, Integer>();
@@ -36,9 +42,11 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 
 	private transient Table<T> table;
 
-	protected static Hashtable<Class<?>, Table<?>> tables = new Hashtable<Class<?>, Table<?>>();
+	protected static HashMap<Class<?>, Table<? extends ActiveRecordBase>> tables = new HashMap<Class<?>, Table<? extends ActiveRecordBase>>();
 
 	public static boolean logQueries = false;
+
+	private transient Connection con = null;
 
 	public ActiveRecordBase() {
 //		tableName = ClassUtil.getTableName(getClass());
@@ -46,7 +54,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		hasMany = new Hashtable<String, Vector<? extends ActiveRecordBase<?>>>();
 		belongsTo = new Hashtable<String, ActiveRecordBase<?>>();
 		Class<?> c = getClass();
-		Table t = (Table<T>)(tables.get(c));
+		Table<T> t = (Table<T>)(tables.get(c));
 		if(t == null) {
 			t = new Table(c);
 			tables.put(c, t);
@@ -57,25 +65,34 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		modified = new Vector<String>();
 	}
 
-	protected Connection getConnection() {
-		return table.getConnection();
+	protected synchronized Connection getConnection() {
+		if(con == null) {
+			con = table.getConnection();
+		}
+		return con;
 	}
 
-	private void loadHasMany(String otherTable) throws Exception {
+	private synchronized void loadHasMany(String otherTable) throws Exception {
 		Vector<Integer> ids = hasManyIDs.get(otherTable);
 		Relationship r = table.hasMany.get(otherTable);
 		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.getConstructor().newInstance());
 		if(ids == null) {
-			Vector<? extends ActiveRecordBase<?>> kids = other.lookupWithCache(r.foreignKey + "=?", getPrimaryKey());
-			Vector<Integer> kidIDs = new Vector<Integer>(kids.size());
-			for(ActiveRecordBase<?> kid: kids) {
-				kidIDs.add(kid.getPrimaryKey());
-				kid.setParent(r.foreignKey, this);
+			boolean conWasNull = con == null;
+			try {
+				con = getConnection();
+				Vector<? extends ActiveRecordBase<?>> kids = other.lookupWithCache(r.foreignKey + "=?", getPrimaryKey());
+				Vector<Integer> kidIDs = new Vector<Integer>(kids.size());
+				for(ActiveRecordBase<?> kid: kids) {
+					kidIDs.add(kid.getPrimaryKey());
+					kid.setParent(r.foreignKey, this);
+				}
+				hasManyIDs.put(otherTable, kidIDs);
+				hasMany.put(otherTable, kids);
+				cache();
+				return;
+			} finally {
+				if(conWasNull) closeCon();
 			}
-			hasManyIDs.put(otherTable, kidIDs);
-			hasMany.put(otherTable, kids);
-			cache();
-			return;
 		}
 
 		Vector<ActiveRecordBase<?>>kids = new Vector<ActiveRecordBase<?>>();
@@ -86,10 +103,10 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		hasMany.put(otherTable, kids);
 
 //		Relationship r = table.hasMany.get(otherTable);
-//		ActiveRecord<?> other = (ActiveRecord<?>)(r.foreignClass.getConstructor().newInstance());
+//		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.getConstructor().newInstance());
 ////		Hashtable<String, Object> where = new Hashtable<String, Object>(1);
 ////		where.put(r.foreignKey, attributes.get(table.primaryKey));
-//		Vector<? extends ActiveRecord<?>> kids = other.lookupWithCache(r.foreignKey + "=?", getPrimaryKey());
+//		Vector<? extends ActiveRecordBase<?>> kids = other.lookupWithCache(r.foreignKey + "=?", getPrimaryKey());
 //		hasMany.put(otherTable, kids);
 	}
 
@@ -113,16 +130,14 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		return getInt(table.primaryKey);
 	}
 
-	public int getID() {
-		return getPrimaryKey();
-	}
-
-	public int getId() {
-		return getPrimaryKey();
-	}
-
 	public int getInt(String field) {
-		return ((Integer)get(field)).intValue();
+		try {
+			return ((Integer)get(field)).intValue();
+		} catch(Exception ex) {
+			System.out.println("getting " + field + " from " + table.name);
+			System.out.println("value is " + get(field));
+			throw new NullPointerException("getInt Error");
+		}
 	}
 
 	public boolean getBoolean(String field) {
@@ -196,7 +211,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 				throw new Exception("Column '" + field + "' doesn't exist in " + table.name + ".");
 			}
 		} catch (Exception ex) {
-			System.out.println("Warning: ActiveRecord could not set " + field);
+			System.out.println("Warning: ActiveRecordBase could not set " + field);
 			ex.printStackTrace();
 		}
 	}
@@ -214,35 +229,55 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 	}
 
 	public int executeUpdate(String set, String where) throws SQLException {
-		Connection con = table.getConnection();
-		Statement st = con.createStatement();
-		int ret = st.executeUpdate("UPDATE " + table.name + " SET " + set + " WHERE " + where);
-		st.close();
-		con.close();
+		int ret;
+		Statement st = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			st = con.createStatement();
+			ret = st.executeUpdate("UPDATE " + table.name + " SET " + set + " WHERE " + where);
+		} finally {
+			close(st);
+			if(conWasNull) {
+				closeCon();
+			}
+		}
 		return ret;
 	}
 
 	public int executeUpdate(String set, String where, Object... vals) throws SQLException {
-		Connection con = table.getConnection();
-		PreparedStatement ps = con.prepareStatement("UPDATE " + table.name + " SET " + set + " WHERE " + where);
-		for(int i=1;i<=vals.length;i++) {
-			ps.setObject(i, vals[i-1]);
+		int ret;
+		PreparedStatement ps = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement("UPDATE " + table.name + " SET " + set + " WHERE " + where);
+			for(int i=1;i<=vals.length;i++) {
+				ps.setObject(i, vals[i-1]);
+			}
+			ret = ps.executeUpdate();
+		} finally {
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		int ret = ps.executeUpdate();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
 	public int executeDelete(String where, Object... vals) throws SQLException {
-		Connection con = table.getConnection();
-		PreparedStatement ps = con.prepareStatement("DELETE FROM " + table.name + " WHERE " + where);
-		for(int i=1;i<=vals.length;i++) {
-			ps.setObject(i, vals[i-1]);
+		int ret;
+		PreparedStatement ps = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement("DELETE FROM " + table.name + " WHERE " + where);
+			for(int i=1;i<=vals.length;i++) {
+				ps.setObject(i, vals[i-1]);
+			}
+			ret = ps.executeUpdate();
+		} finally {
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		int ret = ps.executeUpdate();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
@@ -260,35 +295,47 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		}
 		qs = qs.substring(1);
 		query += " WHERE " + table.primaryKey + " IN (" + qs + ")";
-		Connection con = table.getConnection();
-		PreparedStatement ps = con.prepareStatement(query);
-		int i = 0;
-		for(int val=1;val<pairs.length/2;val+=2) {
-			ps.setObject(++i, pairs[val]);
+		PreparedStatement ps = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(int val=1;val<pairs.length/2;val+=2) {
+				ps.setObject(++i, pairs[val]);
+			}
+			for(T el: els) {
+				ps.setInt(++i, el.getPrimaryKey());
+			}
+			ps.executeUpdate();
+		} finally {
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		for(T el: els) {
-			ps.setInt(++i, el.getPrimaryKey());
-		}
-		ps.executeUpdate();
-		ps.close();
-		con.close();
 	}
 
 	public void reset() throws SQLException {
-		Connection con = table.getConnection();
-		PreparedStatement ps = con.prepareStatement("SELECT * FROM " + table.name + " WHERE " + table.primaryKey + "=?");
-		ps.setInt(1, getPrimaryKey());
-		ResultSet rs = ps.executeQuery();
-		if(rs.next()) {
-			readRow(rs);
-		}
-		rs.close();
-		ps.close();
-		con.close();
 		hasMany.clear();
 		belongsTo.clear();
 		hasManyIDs.clear();
 		belongsToIDs.clear();
+
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement("SELECT * FROM " + table.name + " WHERE " + table.primaryKey + "=?");
+			ps.setInt(1, getPrimaryKey());
+			rs = ps.executeQuery();
+			if(rs.next()) {
+				readRow(rs);
+			}
+		} finally {
+			close(rs);
+			close(ps);
+			if(conWasNull) closeCon();
+		}
 		cache();
 	}
 
@@ -299,6 +346,8 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		} else if(table.hasMany.get(field) != null) {
 			hasMany.remove(field);
 			hasManyIDs.remove(field);
+		} else {
+			return;
 		}
 		cache();
 	}
@@ -318,24 +367,25 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		Vector<Integer> ids = (Vector<Integer>)(MemCache.get(table.name + "_ids"));
 		if(ids == null) {
 			ids = new Vector<Integer>();
-			Connection con = getConnection();
-			String query = "select " + table.primaryKey + " from " + table.name;
-			Vector<Object> vals = new Vector<Object>();
+			String query = "SELECT " + table.primaryKey + " FROM " + table.name;
 			if(logQueries) {
 				System.out.println(query);
 			}
-			PreparedStatement ps = con.prepareStatement(query);
-			int i = 0;
-			for(Object val: vals) {
-				ps.setObject(++i, val);
+			PreparedStatement ps = null;
+			ResultSet rs = null;
+			boolean conWasNull = con == null;
+			try {
+				con = getConnection();
+				ps = con.prepareStatement(query);
+				rs = ps.executeQuery();
+				while(rs.next()) {
+					ids.add(rs.getInt(1));
+				}
+			} finally {
+				close(rs);
+				close(ps);
+				if(conWasNull) closeCon();
 			}
-			ResultSet rs = ps.executeQuery();
-			while(rs.next()) {
-				ids.add(rs.getInt(1));
-			}
-			rs.close();
-			ps.close();
-			con.close();
 			MemCache.set(table.name + "_ids", ids, CACHE_TIME);
 		}
 		Vector<T> ret = new Vector<T>();
@@ -360,103 +410,132 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 	}
 
 	public Vector<T> lookup(String where, Object... vals) throws SQLException {
-		Connection con = getConnection();
 		String query = "select * from " + table.name;
 		if(where != null) {
 			query += " WHERE " + where;
 		}
-		PreparedStatement ps = con.prepareStatement(query);
 		if(logQueries) {
-			System.out.println(ps);
+			System.out.println(query);
 		}
-		int i = 0;
-		for(Object val: vals) {
-			ps.setObject(++i, val);
+
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		Vector<T> ret;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(Object val: vals) {
+				ps.setObject(++i, val);
+			}
+			rs = ps.executeQuery();
+			ret = read(rs);
+		} finally {
+			close(rs);
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		ResultSet rs = ps.executeQuery();
-		Vector<T> ret = read(rs);
-		rs.close();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
 	public Vector<T> lookupWithCache(int limit, int offset, String where, Object... vals) throws SQLException {
-		Connection con = getConnection();
 		String query = "SELECT " + table.primaryKey + " FROM " + table.name;
 		if(where != null) {
 			query += " WHERE " + where;
 		}
 		query += " LIMIT " + limit + " OFFSET " + offset;
-		PreparedStatement ps = con.prepareStatement(query);
 		if(logQueries) {
-			System.out.println(ps);
+			System.out.println(query);
 		}
-		int i = 0;
-		for(Object val: vals) {
-			ps.setObject(++i, val);
-		}
-		ResultSet rs = ps.executeQuery();
+
+		PreparedStatement ps = null;
+		ResultSet rs = null;
 		Vector<T> ret = new Vector<T>();
-		while(rs.next()) {
-			ret.add(lookup(rs.getInt(1)));
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(Object val: vals) {
+				ps.setObject(++i, val);
+			}
+			rs = ps.executeQuery();
+			while(rs.next()) {
+				ret.add(lookup(rs.getInt(1)));
+			}
+		} finally {
+			close(rs);
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		rs.close();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
 	public Vector<T> lookupWithCache(String where, Object... vals) throws SQLException {
-		Connection con = getConnection();
 		String query = "select " + table.primaryKey + " from " + table.name;
 		if(where != null) {
 			query += " WHERE " + where;
 		}
-		PreparedStatement ps = con.prepareStatement(query);
 		if(logQueries) {
-			System.out.println(ps);
+			System.out.println(query);
 		}
-		int i = 0;
-		for(Object val: vals) {
-			ps.setObject(++i, val);
-		}
-		ResultSet rs = ps.executeQuery();
+
+		PreparedStatement ps = null;
+		ResultSet rs = null;
 		Vector<T> ret = new Vector<T>();
-		while(rs.next()) {
-			ret.add(lookup(rs.getInt(1)));
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(Object val: vals) {
+				ps.setObject(++i, val);
+			}
+			rs = ps.executeQuery();
+			while(rs.next()) {
+				ret.add(lookup(rs.getInt(1)));
+			}
+		} finally {
+			close(rs);
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		rs.close();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
 	public Vector<T> lookup(int limit, int offset, String where, Object... vals) throws SQLException {
-		Connection con = getConnection();
 		String query = "SELECT * FROM " + table.name;
 		if(where != null) {
 			query += " WHERE " + where;
 		}
 		query += " LIMIT " + limit + " OFFSET " + offset;
-		PreparedStatement ps = con.prepareStatement(query);
 		if(logQueries) {
-			System.out.println(ps);
+			System.out.println(query);
 		}
-		int i = 0;
-		for(Object val: vals) {
-			ps.setObject(++i, val);
+
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		Vector<T> ret;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(Object val: vals) {
+				ps.setObject(++i, val);
+			}
+			rs = ps.executeQuery();
+			ret = read(rs);
+		} finally {
+			close(rs);
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		ResultSet rs = ps.executeQuery();
-		Vector<T> ret = read(rs);
-		rs.close();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
 	public Vector<T> lookup(Map<String, Object> where) throws SQLException {
-		Connection con = getConnection();
 		String query = "select * from " + table.name;
 		Vector<Object> vals = new Vector<Object>();
 		String whereClause = "";
@@ -475,16 +554,25 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		if(logQueries) {
 			System.out.println(query);
 		}
-		PreparedStatement ps = con.prepareStatement(query);
-		int i = 0;
-		for(Object val: vals) {
-			ps.setObject(++i, val);
+
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		Vector<T> ret;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(Object val: vals) {
+				ps.setObject(++i, val);
+			}
+			rs = ps.executeQuery();
+			ret = read(rs);
+		} finally {
+			close(rs);
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		ResultSet rs = ps.executeQuery();
-		Vector<T> ret = read(rs);
-		rs.close();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
@@ -493,7 +581,6 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 	}
 
 	public Vector<T> lookup(Map<String, Object> where, String orderBy, boolean ascending) throws SQLException {
-		Connection con = getConnection();
 		String query = "select * from " + table.name;
 		Vector<Object> vals = new Vector<Object>();
 		String whereClause = "";
@@ -514,16 +601,25 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		if(logQueries) {
 			System.out.println(query);
 		}
-		PreparedStatement ps = con.prepareStatement(query);
-		int i = 0;
-		for(Object val: vals) {
-			ps.setObject(++i, val);
+
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		Vector<T> ret = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(Object val: vals) {
+				ps.setObject(++i, val);
+			}
+			rs = ps.executeQuery();
+			ret = read(rs);
+		} finally {
+			close(rs);
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		ResultSet rs = ps.executeQuery();
-		Vector<T> ret = read(rs);
-		rs.close();
-		ps.close();
-		con.close();
 		return ret;
 	}
 
@@ -535,7 +631,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 				obj.readRow(rs);
 				ret.add(obj);
 			} catch (Exception ex) {
-				System.out.println("Error: ActiveRecord could not instantiate: " + getClass().getName());
+				System.out.println("Error: ActiveRecordBase could not instantiate: " + getClass().getName());
 				ex.printStackTrace();
 			}
 		}
@@ -556,30 +652,44 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		if(logQueries) {
 			System.out.println(query);
 		}
-		Connection con = getConnection();
+		PreparedStatement ps = null;
+		boolean conWasNull = con == null;
 		if(attributes.get(table.primaryKey) == null) {
-			PreparedStatement ps = con.prepareStatement("SELECT nextval(?)");
-			ps.setString(1, table.name + "_" + table.primaryKey + "_seq");
-			ResultSet rs = ps.executeQuery();
-			if(rs.next()) {
-				attributes.put(table.primaryKey, rs.getInt(1));
+			ResultSet rs = null;
+			try {
+				con = getConnection();
+				ps = con.prepareStatement("SELECT nextval(?)");
+				ps.setString(1, table.name + "_" + table.primaryKey + "_seq");
+				rs = ps.executeQuery();
+				if(rs.next()) {
+					attributes.put(table.primaryKey, rs.getInt(1));
+				}
+			} finally {
+				close(rs);
+				close(ps);
 			}
-			ps.close();
 		}
-		PreparedStatement ps = con.prepareStatement(query);
-		int i = 0;
-		for(String col: modified) {
-			ps.setObject(++i, attributes.get(col));
+
+		try {
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(String col: modified) {
+				ps.setObject(++i, attributes.get(col));
+			}
+			ps.executeUpdate();
+		} finally {
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		ps.executeUpdate();
-		ps.close();
-		con.close();
+
 		cache();
 		resetParents();
 		modified.removeAllElements();
 	}
 
 	public void update() throws SQLException {
+		String times = "";
+		long startTime = System.currentTimeMillis();
 		if(modified.size() == 0) {
 			return;
 		}
@@ -588,51 +698,56 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 			updateStr += "," + col + "=?";
 		}
 		updateStr = updateStr.substring(1);
-		String query = "UPDATE " + table.name + " SET " + updateStr + " WHERE " + getPrimaryKeyCondition();
+		String query = "UPDATE " + table.name + " SET " + updateStr + " WHERE " + table.primaryKey + "=?";
 		if(logQueries) {
 			System.out.println(query);
 			System.out.println("modified (" + modified.size() + "): " + modified);
 		}
-		Connection con = getConnection();
-		PreparedStatement ps = con.prepareStatement(query);
-		int i = 0;
-		for(String col: modified) {
-			ps.setObject(++i, attributes.get(col));
+
+		times += "starting connection stuff " + (System.currentTimeMillis()-startTime) + "ms";
+		PreparedStatement ps = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			times += ("got connection " + (System.currentTimeMillis()-startTime) + "ms");
+			ps = con.prepareStatement(query);
+			int i = 0;
+			for(String col: modified) {
+				ps.setObject(++i, attributes.get(col));
+			}
+			ps.setObject(++i, attributes.get(table.primaryKey));
+			times += ("executing " + (System.currentTimeMillis()-startTime) + "ms");
+			ps.executeUpdate();
+		} finally {
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		ps.setObject(++i, attributes.get(table.primaryKey));
-		ps.executeUpdate();
-		ps.close();
-		con.close();
+		times += ("done. " + (System.currentTimeMillis()-startTime) + "ms");
+
 		modified.removeAllElements();
 		cache();
+		times += ("cached. " + (System.currentTimeMillis()-startTime) + "ms");
+		if(System.currentTimeMillis() - startTime > 3000) System.out.println(times);
 	}
 
 	public void delete() throws SQLException {
 		uncache();
 		resetParents();
-		Connection con = getConnection();
-		String query = "DELETE FROM " + table.name + " WHERE " + getPrimaryKeyCondition();
+		String query = "DELETE FROM " + table.name + " WHERE " + table.primaryKey + "=?";
 		if(logQueries) {
 			System.out.println(query);
 		}
-		PreparedStatement ps = con.prepareStatement(query);
-		int i = 0;
-		ps.setObject(++i, attributes.get(table.primaryKey));
-		ps.executeUpdate();
-		con.close();
-	}
-
-	protected String getPrimaryKeyCondition() {
-		return table.primaryKey + "=?";
-		/*
-		String str = "";
-		Iterator<String> it = primaryKeys.iterator();
-		while(it.hasNext()) {
-			String key = it.next();
-			str += " AND " + key + "=?";
+		PreparedStatement ps = null;
+		boolean conWasNull = con == null;
+		try {
+			con = getConnection();
+			ps = con.prepareStatement(query);
+			ps.setObject(1, getPrimaryKey());
+			ps.executeUpdate();
+		} finally {
+			close(ps);
+			if(conWasNull) closeCon();
 		}
-		return str.substring(5);
-		 */
 	}
 
 	public boolean equals(Object o) {
@@ -689,6 +804,47 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		}
 		table = t;
 	}
+
+	public synchronized void closeCon() {
+		if(con != null) {
+			try {
+				con.close();
+			} catch(Exception ex) {
+				
+			} finally {
+				con = null;
+			}
+		}
+	}
+
+	public static void close(Connection c) {
+		if(c != null) {
+			try {
+				c.close();
+			} catch(Exception ex) {
+
+			}
+		}
+	}
+	public static void close(Statement c) {
+		if(c != null) {
+			try {
+				c.close();
+			} catch(Exception ex) {
+
+			}
+		}
+	}
+	public static void close(ResultSet c) {
+		if(c != null) {
+			try {
+				c.close();
+			} catch(Exception ex) {
+
+			}
+		}
+	}
+
 /* just use ps.setObject() instead...
 	protected static void setPreparedValue(PreparedStatement ps, int index, Object val) throws SQLException {
 		if(val.getClass() == String.class) {

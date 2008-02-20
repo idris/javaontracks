@@ -3,24 +3,31 @@ package org.javaontracks.activerecord;
 import java.io.FileInputStream;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
-import java.sql.Driver;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.Properties;
-import java.util.Vector;
+
+import javax.sql.DataSource;
+
+import org.javaontracks.activerecord.drivers.PostgreSQLDataSource;
 
 public class Table<T extends ActiveRecordBase<T>> {
 	public final String name;
 	public final Hashtable<String, Column> columns;
-	public final Vector<String> columnNames;
+	public final ArrayList<String> columnNames;
 	public final String primaryKey;
 	public final Class<T> tableClass;
 	public String primarySequence;
 	public final Hashtable<String, Relationship> hasMany;
 	public final Hashtable<String, Relationship> belongsTo;
+//	public final String dbURL;
+//	public static Class<Driver> driverClass;
+	public final String packageName;
+	public static final HashMap<String, DataSource> sources = new HashMap<String, DataSource>();
 
 	public Table(Class<T> arClass) {
 		tableClass = arClass;
@@ -31,11 +38,17 @@ public class Table<T extends ActiveRecordBase<T>> {
 		hasMany = new Hashtable<String, Relationship>();
 		belongsTo = new Hashtable<String, Relationship>();
 		columns = new Hashtable<String, Column>();
-		columnNames = new Vector<String>();
+		columnNames = new ArrayList<String>();
+		String pName = tableClass.getPackage().getName();
+		packageName = pName.substring(pName.lastIndexOf('.')+1);
+
+		Connection con = null;
+		Statement st = null;
+		ResultSet rs = null;
 		try {
-			Connection con = getConnection();
-			Statement st = con.createStatement(ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
-			ResultSet rs = st.executeQuery("SELECT * FROM " + name + " limit 1");
+			con = getConnection();
+			st = con.createStatement(ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
+			rs = st.executeQuery("SELECT * FROM " + name + " limit 1");
 			ResultSetMetaData md = rs.getMetaData();
 			int columnCount = md.getColumnCount();
 			for(int i=1;i<=columnCount;i++) {
@@ -53,11 +66,11 @@ public class Table<T extends ActiveRecordBase<T>> {
 				columns.put(cName, new Column(cName, c));
 				columnNames.add(cName);
 			}
-			rs.close();
-			st.close();
+			ActiveRecordBase.close(rs);
+			ActiveRecordBase.close(st);
 
 			DatabaseMetaData dmd = con.getMetaData();
-			rs = dmd.getColumns("mudball", "public", name, null);
+			rs = dmd.getColumns(packageName, "public", name, null);
 			while(rs.next()) {
 				String name = rs.getString("COLUMN_NAME");
 				String def = rs.getString("COLUMN_DEF");
@@ -80,9 +93,9 @@ public class Table<T extends ActiveRecordBase<T>> {
 					c.defaultValue = obj;
 				}
 			}
-			rs.close();
+			ActiveRecordBase.close(rs);
 
-			rs = dmd.getExportedKeys("mudball", "public", name); //for has_many
+			rs = dmd.getExportedKeys(packageName, "public", name); //for has_many
 			while(rs.next()) {
 				String otherTable = rs.getString("FKTABLE_NAME");
 				String otherKey = rs.getString("FKCOLUMN_NAME");
@@ -92,8 +105,8 @@ public class Table<T extends ActiveRecordBase<T>> {
 //				System.out.println("FK: " + rs.getString("FKTABLE_NAME") + " - " + rs.getString("FK_NAME"));
 //				System.out.println("columns: " + rs.getString("PKCOLUMN_NAME") + " " + rs.getString("FKCOLUMN_NAME"));
 			}
-			rs.close();
-			rs = dmd.getImportedKeys("mudball", "public", name); //for belongs_to
+			ActiveRecordBase.close(rs);
+			rs = dmd.getImportedKeys(packageName, "public", name); //for belongs_to
 			while(rs.next()) {
 				String otherTable = rs.getString("PKTABLE_NAME");
 				String foreignKey = rs.getString("FKCOLUMN_NAME");
@@ -104,7 +117,8 @@ public class Table<T extends ActiveRecordBase<T>> {
 //				System.out.println("columns: " + rs.getString("PKCOLUMN_NAME") + " " + rs.getString("FKCOLUMN_NAME"));
 			}
 
-			con.close();
+			ActiveRecordBase.close(rs);
+			ActiveRecordBase.close(con);
 
 	/*
 			DatabaseMetaData dmd = con.getMetaData();
@@ -113,7 +127,7 @@ public class Table<T extends ActiveRecordBase<T>> {
 				primaryKey = rs.getString("COLUMN_NAME");
 			}
 			rs.close();
-			 */
+	*/
 		} catch(Exception ex) {
 			//TODO: This is BAD!
 			System.err.println("ERROR: ActiveRecord could not load table " + name);
@@ -133,7 +147,7 @@ public class Table<T extends ActiveRecordBase<T>> {
 		Class<?> otherClass = Class.forName(tableClass.getPackage().getName() + "." + ClassUtil.toCamelCase(name));
 		belongsTo.put(ClassUtil.keyToReference(foreignKey), new Relationship(otherTable, foreignKey, otherClass));
 	}
-	
+
 	protected Hashtable<String, Object>getDefaultAttributes() {
 		Hashtable<String, Object> ret = new Hashtable<String, Object>(columns.size());
 		for(Column col: columns.values()) {
@@ -144,23 +158,36 @@ public class Table<T extends ActiveRecordBase<T>> {
 		return ret;
 	}
 
-	protected Connection getConnection() {
-		Driver drvr = null;
+	protected synchronized DataSource initializeSource() {
+		DataSource source = sources.get(packageName);
+		if(source != null) return source;
+		Properties props = new Properties();
+		FileInputStream fis;
 		try {
-			Properties props = new Properties();
-			FileInputStream fis;
-			try {
-				fis = new FileInputStream("/raid/www/members.freewebz.com/WEB-INF/classes/ActiveRecord.properties");
-			} catch(Exception ex) {
-				fis = new FileInputStream("ActiveRecord.properties");
-			}
+			fis = new FileInputStream(packageName + ".properties");
 			props.load(fis);
 			fis.close();
-			String dbURL = props.getProperty(tableClass.getName().substring(0, tableClass.getName().length() - (tableClass.getSimpleName().length() + 1)));
-			drvr = (Driver)Class.forName("org.postgresql.Driver").newInstance();
-			return drvr.connect(dbURL, new Properties());
+		} catch(Exception ex) {
+		}
+		source = new PostgreSQLDataSource(packageName, props);
+		sources.put(packageName, source);
+		return source;
+	}
+
+	protected DataSource getSource() {
+		DataSource source = sources.get(packageName);
+		if(source == null) {
+			source = initializeSource();
+		}
+		return source;
+	}
+
+	public Connection getConnection() {
+		try {
+			return getSource().getConnection();
 		} catch (Exception ex) {
 			System.err.println("ERROR: ActiveRecord could not connect to database.\n" + ex.getMessage());
+			ex.printStackTrace();
 		}
 		return null;
 	}
