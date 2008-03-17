@@ -1,6 +1,3 @@
-/**
- * 
- */
 package org.javaontracks.activerecord.drivers;
 
 import java.io.PrintWriter;
@@ -17,7 +14,7 @@ import org.postgresql.ds.PGPoolingDataSource;
 
 /**
  * @author idris
- * 
+ * requires postgresql driver: http://jdbc.postgresql.org/download.html
  */
 public class PostgreSQLDataSource implements DataSource {
 	// PGConnectionPoolDataSource source = null;

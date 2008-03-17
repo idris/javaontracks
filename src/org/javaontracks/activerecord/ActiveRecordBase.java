@@ -14,8 +14,6 @@ import java.util.Hashtable;
 import java.util.Map;
 import java.util.Vector;
 
-import org.jvnet.inflector.Noun;
-
 import org.javaontracks.cache.MemCache;
 
 public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements Serializable {
@@ -767,7 +765,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 			MemCache.delete(r.table + "-" + fk.toString());
 		}
 		if(parent != null) {
-			((ActiveRecordBase<?>)(get(parent))).reset(Noun.pluralOf(ClassUtil.keyToReference(parent)));
+			((ActiveRecordBase<?>)(get(parent))).reset(ClassUtil.pluralOf(ClassUtil.keyToReference(parent)));
 			parent = null;
 		}
 	}
