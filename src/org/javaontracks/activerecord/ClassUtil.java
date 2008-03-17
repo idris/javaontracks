@@ -1,6 +1,6 @@
 package org.javaontracks.activerecord;
 
-import english.EnglishNoun; //http://www.yorku.ca/jmason/english.htm
+import org.javaontracks.util.EnglishNoun;
 
 public abstract class ClassUtil {
 	public static String getTableName(Class<?> c) {
