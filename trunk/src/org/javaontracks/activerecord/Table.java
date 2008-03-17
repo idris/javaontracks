@@ -13,8 +13,6 @@ import java.util.Properties;
 
 import javax.sql.DataSource;
 
-import org.javaontracks.activerecord.drivers.PostgreSQLDataSource;
-
 public class Table<T extends ActiveRecordBase<T>> {
 	public final String name;
 	public final Hashtable<String, Column> columns;
@@ -136,8 +134,7 @@ public class Table<T extends ActiveRecordBase<T>> {
 	}
 
 	protected void hasMany(String otherTable, String otherKey) throws ClassNotFoundException {
-		//find a real way to get the class. this is unreliable.. assumes otherTable.chomp!
-		Class<?> otherClass = Class.forName(tableClass.getPackage().getName() + "." + ClassUtil.toCamelCase(otherTable.substring(0, otherTable.length()-1)));
+		Class<?> otherClass = Class.forName(tableClass.getPackage().getName() + "." + ClassUtil.getClassName(otherTable));
 		String name = otherTable;
 		hasMany.put(name, new Relationship(otherTable, otherKey, otherClass));
 	}
@@ -163,13 +160,31 @@ public class Table<T extends ActiveRecordBase<T>> {
 		if(source != null) return source;
 		Properties props = new Properties();
 		FileInputStream fis;
+		String propertiesFilename = packageName + ".properties";
 		try {
-			fis = new FileInputStream(packageName + ".properties");
+			fis = new FileInputStream(propertiesFilename);
 			props.load(fis);
 			fis.close();
 		} catch(Exception ex) {
+			System.out.println("ActiveRecord: could not load properties file (" + propertiesFilename + ")");
 		}
-		source = new PostgreSQLDataSource(packageName, props);
+		String driverType = props.getProperty("driverType", "postgres");
+		try {
+			Class driver;
+			if(driverType.equals("oracle")) {
+				driver = Class.forName("org.javaontracks.activerecord.drivers.OracleDataSource");
+//				source = new OracleDataSource(packageName, props);
+			} else if(driverType.equals("mysql")) {
+				driver = Class.forName("org.javaontracks.activerecord.drivers.MysqlDataSource");
+//				source = new MysqlDataSource(packageName, props);
+			} else { // if(driverType.equals("postgres")) {
+				driver = Class.forName("org.javaontracks.activerecord.drivers.PostgreSQLDataSource");
+//				source = new PostgreSQLDataSource(packageName, props);
+			}
+			source = (DataSource)driver.getConstructor(String.class, Properties.class).newInstance(packageName, props);
+		} catch(Exception ex) {
+			ex.printStackTrace();
+		}
 		sources.put(packageName, source);
 		return source;
 	}
