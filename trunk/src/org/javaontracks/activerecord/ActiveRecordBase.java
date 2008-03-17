@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Vector;
 
 import org.javaontracks.cache.MemCache;
+import javax.servlet.ServletRequest;
 
 public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements Serializable {
 //	private String tableName;
@@ -34,7 +35,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 
 	private transient String parent = null;
 
-	private Vector<String> modified;
+	private transient Vector<String> modified = new Vector<String>();
 
 	protected static final int CACHE_TIME = 1000*60*60*5;
 
@@ -73,7 +74,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 	private synchronized void loadHasMany(String otherTable) throws Exception {
 		Vector<Integer> ids = hasManyIDs.get(otherTable);
 		Relationship r = table.hasMany.get(otherTable);
-		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.getConstructor().newInstance());
+		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.newInstance());
 		if(ids == null) {
 			boolean conWasNull = con == null;
 			try {
@@ -114,7 +115,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		if(otherID == null) {
 			return;
 		}
-		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.getConstructor().newInstance());
+		ActiveRecordBase<?> other = (ActiveRecordBase<?>)(r.foreignClass.newInstance());
 		belongsTo.put(otherTable, other.lookup(otherID.intValue()));
 	}
 
@@ -128,14 +129,12 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		return getInt(table.primaryKey);
 	}
 
+	public String getString(String field) {
+		return get(field);
+	}
+
 	public int getInt(String field) {
-		try {
-			return ((Integer)get(field)).intValue();
-		} catch(Exception ex) {
-			System.out.println("getting " + field + " from " + table.name);
-			System.out.println("value is " + get(field));
-			throw new NullPointerException("getInt Error");
-		}
+		return ((Integer)get(field)).intValue();
 	}
 
 	public boolean getBoolean(String field) {
@@ -211,6 +210,20 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		} catch (Exception ex) {
 			System.out.println("Warning: ActiveRecordBase could not set " + field);
 			ex.printStackTrace();
+		}
+	}
+
+	public void read(ServletRequest request) {
+		for(Column col: table.columns.values()) {
+			String val = request.getParameter(col.name);
+			if(val == null) {
+				continue;
+			}
+			if(col.type == String.class) {
+				set(col.name, val);
+			} else if(col.type == Integer.class) {
+				set(col.name, Integer.parseInt(val));
+			}
 		}
 	}
 
@@ -396,9 +409,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 	public T lookup(int id) throws SQLException {
 		T obj = (T)(MemCache.get(getMemCachedKey(id)));
 		if(obj == null) {
-			Hashtable<String, Object> map = new Hashtable<String, Object>(1);
-			map.put(table.primaryKey, id);
-			Vector<T> result = lookup(map);
+			Vector<T> result = lookup(table.primaryKey + "=?", id);
 			if(result.size() > 0) {
 				obj = result.get(0);
 				if(obj != null) MemCache.set(getMemCachedKey(id), obj, CACHE_TIME);
@@ -625,7 +636,7 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		Vector <T> ret = new Vector<T>();
 		while (rs.next()) {
 			try {
-				T obj = (T)(getClass().getConstructor().newInstance());
+				T obj = (T)(getClass().newInstance());
 				obj.readRow(rs);
 				ret.add(obj);
 			} catch (Exception ex) {
