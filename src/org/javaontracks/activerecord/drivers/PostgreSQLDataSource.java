@@ -25,6 +25,12 @@ public class PostgreSQLDataSource implements DataSource {
 		source = new PGPoolingDataSource();
 		source.setDataSourceName("ActiveRecord-" + packageName);
 		source.setServerName(props.getProperty("serverName"));
+		try {
+			int portNumber = Integer.parseInt(props.getProperty("port"));
+			if(portNumber > 0) {
+				source.setPortNumber(portNumber);
+			}
+		} catch(Exception ex) {}
 		source.setDatabaseName(props.getProperty("databaseName"));
 		source.setUser(props.getProperty("user"));
 		source.setPassword(props.getProperty("password"));
