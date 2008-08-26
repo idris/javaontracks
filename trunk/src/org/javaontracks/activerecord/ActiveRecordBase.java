@@ -15,7 +15,6 @@ import java.util.Map;
 import java.util.Vector;
 
 import org.javaontracks.cache.MemCache;
-import javax.servlet.ServletRequest;
 
 public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements Serializable {
 //	private String tableName;
@@ -210,20 +209,6 @@ public abstract class ActiveRecordBase<T extends ActiveRecordBase<T>> implements
 		} catch (Exception ex) {
 			System.out.println("Warning: ActiveRecordBase could not set " + field);
 			ex.printStackTrace();
-		}
-	}
-
-	public void read(ServletRequest request) {
-		for(Column col: table.columns.values()) {
-			String val = request.getParameter(col.name);
-			if(val == null) {
-				continue;
-			}
-			if(col.type == String.class) {
-				set(col.name, val);
-			} else if(col.type == Integer.class) {
-				set(col.name, Integer.parseInt(val));
-			}
 		}
 	}
 
